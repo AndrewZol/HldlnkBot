@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -9,12 +10,32 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from flask import Flask
 
 # Загрузка переменных окружения
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+# --- СОЗДАЁМ FLASK-ПРИЛОЖЕНИЕ (РЕШАЕТ ПРОБЛЕМУ С ПОРТОМ) ---
+flask_app = Flask('')
+
+@flask_app.route('/')
+@flask_app.route('/health')
+def health_check():
+    return "Bot is running", 200
+
+def run_flask():
+    """Запускает Flask-сервер в отдельном потоке"""
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host='0.0.0.0', port=port)
+
+# Запускаем Flask в фоновом потоке
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+# --- КОНЕЦ БЛОКА ДЛЯ ПОРТА ---
+
 
 # Проверка, что токены загружены
 if not BOT_TOKEN:
