@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: telegram-meal-bot-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.0
