@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+import sqlite3
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -64,7 +65,7 @@ main_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Работа с историей
+# ========== РАБОТА С ИСТОРИЕЙ ПИТАНИЯ ==========
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -111,9 +112,48 @@ def clear_user_history(user_id):
         return True
     return False
 
-# Обработчики команд
+# ========== БАЗА ДАННЫХ ПОЛЬЗОВАТЕЛЕЙ (ДЛЯ СТАТИСТИКИ) ==========
+def init_db():
+    """Создаёт таблицу users при первом запуске"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            last_name TEXT,
+            username TEXT,
+            first_seen TIMESTAMP,
+            last_seen TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_user(user_id, first_name, last_name, username):
+    """Сохраняет или обновляет информацию о пользователе"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    now = datetime.now()
+    cursor.execute('''
+        INSERT INTO users (user_id, first_name, last_name, username, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            first_name = excluded.first_name,
+            last_name = excluded.last_name,
+            username = excluded.username,
+            last_seen = excluded.last_seen
+    ''', (user_id, first_name, last_name, username, now, now))
+    conn.commit()
+    conn.close()
+
+# ========== ОБРАБОТЧИКИ КОМАНД ==========
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Сохраняем пользователя
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     welcome_text = (
         "🍳 *Привет! Я твой персональный кулинарный помощник!*\n\n"
         "Я помогу тебе:\n"
@@ -130,6 +170,10 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
+    # Сохраняем пользователя
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     help_text = (
         "❓ *Помощь*\n\n"
         "📝 *Как составить рацион:*\n"
@@ -150,17 +194,67 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("clear_memory"))
 async def cmd_clear_memory(message: types.Message):
+    # Сохраняем пользователя
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     if clear_user_history(message.from_user.id):
         await message.answer("🗑 История твоих рационов очищена! Теперь я буду составлять меню с чистого листа.")
     else:
         await message.answer("📭 У тебя пока нет сохранённой истории.")
 
+# ========== СКРЫТАЯ КОМАНДА /stats (ТОЛЬКО ДЛЯ АДМИНИСТРАТОРА) ==========
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ TELEGRAM ID (узнайте через @userinfobot)
+    ADMIN_ID = 123456789  # <--- ВСТАВЬТЕ СВОЙ ID СЮДА
+    
+    # Проверка: только администратор может видеть статистику
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ У вас нет доступа к этой команде.")
+        return
+    
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    # Общее количество пользователей
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+    
+    # Новые за сегодня
+    today = datetime.now().date()
+    cursor.execute("SELECT COUNT(*) FROM users WHERE DATE(last_seen) = ?", (today,))
+    today_users = cursor.fetchone()[0]
+    
+    # Активные за последние 7 дней
+    week_ago = datetime.now().date()
+    cursor.execute("SELECT COUNT(*) FROM users WHERE DATE(last_seen) >= ?", (week_ago,))
+    week_users = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    await message.answer(
+        f"📊 *Статистика бота*\n\n"
+        f"👥 Всего пользователей: `{total_users}`\n"
+        f"🆕 За сегодня: `{today_users}`\n"
+        f"📅 За 7 дней: `{week_users}`",
+        parse_mode="Markdown"
+    )
+
 @dp.message(F.text == "📋 Составить рацион")
 async def button_generate(message: types.Message):
+    # Сохраняем пользователя
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     await message.answer("📝 Напиши список продуктов, которые есть дома, через запятую\n\nПример: *курица, рис, помидоры, яйца, лук*", parse_mode="Markdown")
 
 @dp.message(F.text == "🗑 Очистить историю")
 async def button_clear(message: types.Message):
+    # Сохраняем пользователя
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     if clear_user_history(message.from_user.id):
         await message.answer("🗑 История твоих рационов очищена!")
     else:
@@ -168,11 +262,19 @@ async def button_clear(message: types.Message):
 
 @dp.message(F.text == "❓ Помощь")
 async def button_help(message: types.Message):
+    # Сохраняем пользователя
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     await cmd_help(message)
 
 # Генерация рациона
 @dp.message(F.text)
 async def generate_meal_plan(message: types.Message):
+    # Сохраняем пользователя при каждом сообщении
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
     user_id = message.from_user.id
     products = message.text.strip()
     
@@ -262,6 +364,10 @@ async def generate_meal_plan(message: types.Message):
 async def main():
     print("🤖 Бот запущен и готов к работе!")
     print(f"📁 Файл истории: {HISTORY_FILE}")
+    
+    # Инициализируем базу данных пользователей
+    init_db()
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
