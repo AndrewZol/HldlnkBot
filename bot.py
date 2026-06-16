@@ -671,23 +671,38 @@ async def generate_meal_plan(message: types.Message):
         
         meal_plan = response.choices[0].message.content
         
-        # Удаляем ВСЕ потенциально опасные символы форматирования
+        # --- АГРЕССИВНАЯ ОЧИСТКА ОТ ВСЕХ СПЕЦСИМВОЛОВ ---
+        # Удаляем одиночные спецсимволы
         meal_plan = re.sub(r'[*_`~#]', '', meal_plan)
+        # Убираем Markdown-жирность (**текст** → текст)
         meal_plan = re.sub(r'\*\*([^*]+)\*\*', r'\1', meal_plan)
+        # Убираем Markdown-курсив (_текст_ → текст)
         meal_plan = re.sub(r'__([^_]+)__', r'\1', meal_plan)
+        meal_plan = re.sub(r'_([^_]+)_', r'\1', meal_plan)
+        # Убираем зачёркивание
         meal_plan = re.sub(r'~~([^~]+)~~', r'\1', meal_plan)
+        # Убираем ссылки [текст](url) → текст
+        meal_plan = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', meal_plan)
+        # Убираем HTML-теги
+        meal_plan = re.sub(r'<[^>]+>', '', meal_plan)
+        # Убираем множественные пробелы
+        meal_plan = re.sub(r'\s+', ' ', meal_plan)
+        # --- КОНЕЦ ОЧИСТКИ ---
         
         save_meal_to_history(user_id, meal_plan, products.split(","))
         
-        # Отправляем рацион без форматирования
-        await processing_msg.edit_text(meal_plan, parse_mode=None)
+        # Удаляем сообщение "Анализирую..."
+        await processing_msg.delete()
         
-        # ИСПРАВЛЕННЫЙ СОВЕТ: убрали звёздочки и parse_mode
+        # Отправляем чистый рацион новым сообщением
+        await message.answer(meal_plan, parse_mode=None)
+        
+        # Отправляем совет
         await message.answer(
             "💡 Совет: Чтобы получить рецепт любого блюда из этого рациона, отправь команду /recipe и выбери приём пищи.\n\n"
             "Я запомнил этот рацион. Завтра предложу что-то новое, чтобы тебе не надоедало!\n"
             "Напиши /clear_memory если хочешь сбросить историю.",
-            parse_mode=None  # <-- ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ
+            parse_mode=None
         )
         
     except asyncio.TimeoutError:
