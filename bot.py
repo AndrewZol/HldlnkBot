@@ -581,6 +581,7 @@ async def button_help(message: types.Message):
 # ========== ГЕНЕРАЦИЯ РАЦИОНА ==========
 @dp.message(F.text)
 async def generate_meal_plan(message: types.Message):
+    # Сохраняем пользователя при каждом сообщении
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
     
@@ -669,13 +670,20 @@ async def generate_meal_plan(message: types.Message):
         )
         
         meal_plan = response.choices[0].message.content
-        meal_plan = re.sub(r'[*_`~]', '', meal_plan)
+        
+        # Удаляем ВСЕ потенциально опасные символы форматирования
+        # Это более агрессивная очистка
+        meal_plan = re.sub(r'[*_`~#]', '', meal_plan)
+        # Также убираем Markdown-жирность и курсив
+        meal_plan = re.sub(r'\*\*([^*]+)\*\*', r'\1', meal_plan)
+        meal_plan = re.sub(r'__([^_]+)__', r'\1', meal_plan)
+        meal_plan = re.sub(r'~~([^~]+)~~', r'\1', meal_plan)
         
         save_meal_to_history(user_id, meal_plan, products.split(","))
         
-        await processing_msg.edit_text(meal_plan)
+        # Отправляем без parse_mode (безопасно)
+        await processing_msg.edit_text(meal_plan, parse_mode=None)
         
-        # Добавляем подсказку про /recipe
         await message.answer(
             "💡 *Совет:* Чтобы получить рецепт любого блюда из этого рациона, отправь команду `/recipe` и выбери приём пищи.\n\n"
             "Я запомнил этот рацион. Завтра предложу что-то новое, чтобы тебе не надоедало!\n"
