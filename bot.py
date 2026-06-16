@@ -672,23 +672,22 @@ async def generate_meal_plan(message: types.Message):
         meal_plan = response.choices[0].message.content
         
         # Удаляем ВСЕ потенциально опасные символы форматирования
-        # Это более агрессивная очистка
         meal_plan = re.sub(r'[*_`~#]', '', meal_plan)
-        # Также убираем Markdown-жирность и курсив
         meal_plan = re.sub(r'\*\*([^*]+)\*\*', r'\1', meal_plan)
         meal_plan = re.sub(r'__([^_]+)__', r'\1', meal_plan)
         meal_plan = re.sub(r'~~([^~]+)~~', r'\1', meal_plan)
         
         save_meal_to_history(user_id, meal_plan, products.split(","))
         
-        # Отправляем без parse_mode (безопасно)
+        # Отправляем рацион без форматирования
         await processing_msg.edit_text(meal_plan, parse_mode=None)
         
+        # ИСПРАВЛЕННЫЙ СОВЕТ: убрали звёздочки и parse_mode
         await message.answer(
-            "💡 *Совет:* Чтобы получить рецепт любого блюда из этого рациона, отправь команду `/recipe` и выбери приём пищи.\n\n"
+            "💡 Совет: Чтобы получить рецепт любого блюда из этого рациона, отправь команду /recipe и выбери приём пищи.\n\n"
             "Я запомнил этот рацион. Завтра предложу что-то новое, чтобы тебе не надоедало!\n"
             "Напиши /clear_memory если хочешь сбросить историю.",
-            parse_mode="Markdown"
+            parse_mode=None  # <-- ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ
         )
         
     except asyncio.TimeoutError:
