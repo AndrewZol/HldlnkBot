@@ -207,7 +207,7 @@ async def cmd_clear_memory(message: types.Message):
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ TELEGRAM ID (узнайте через @userinfobot)
-    ADMIN_ID = andzolot  # <--- ВСТАВЬТЕ СВОЙ ID СЮДА
+    ADMIN_ID = @andzolot  # <--- ВСТАВЬТЕ СВОЙ ID СЮДА
     
     # Проверка: только администратор может видеть статистику
     if message.from_user.id != ADMIN_ID:
