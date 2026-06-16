@@ -6,7 +6,10 @@ import threading
 import sqlite3
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from openai import AsyncOpenAI
@@ -44,9 +47,12 @@ if not BOT_TOKEN:
 if not DEEPSEEK_API_KEY:
     raise ValueError("DEEPSEEK_API_KEY не найден в переменных окружения")
 
+# ========== ИНИЦИАЛИЗАЦИЯ FSM ==========
+storage = MemoryStorage()
+
 # Инициализация бота и DeepSeek
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
-dp = Dispatcher()
+dp = Dispatcher(storage=storage)  # <--- Добавляем storage
 
 # Подключение к DeepSeek через OpenRouter
 deepseek = AsyncOpenAI(
@@ -64,6 +70,10 @@ main_keyboard = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+# ========== ОПРЕДЕЛЯЕМ СОСТОЯНИЯ (FSM) ==========
+class GoalStates(StatesGroup):
+    waiting_for_goals = State()  # Состояние: ждём ввод 4 чисел
 
 # ========== БАЗА ДАННЫХ (SQLite) ==========
 def init_db():
@@ -226,9 +236,12 @@ def clear_user_history(user_id):
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
+    
+    # Сбрасываем состояние, если пользователь был в процессе ввода целей
+    await state.clear()
     
     welcome_text = (
         "🍳 *Привет! Я твой персональный кулинарный помощник!*\n\n"
@@ -248,98 +261,103 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, parse_mode="Markdown", reply_markup=main_keyboard)
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    user = message.from_user
-    save_user(user.id, user.first_name, user.last_name, user.username)
-    
-    help_text = (
-        "❓ *Помощь*\n\n"
-        "📝 *Как составить рацион:*\n"
-        "Напиши список продуктов через запятую или нажми кнопку «Составить рацион»\n\n"
-        "🧠 *Как бот запоминает:*\n"
-        "• Я помню, что ты ел вчера и позавчера\n"
-        "• Стараюсь не повторять блюда\n"
-        "• Меняю типы кухни и основные ингредиенты\n\n"
-        "🎯 *Цели по КБЖУ:*\n"
-        "/set_goals — установить лимиты калорий, белков, жиров, углеводов\n"
-        "/my_goals — посмотреть текущие цели\n\n"
-        "📖 *Рецепты:*\n"
-        "/recipe — получить рецепт блюда из сегодняшнего рациона\n\n"
-        "🗑 *Очистить историю:*\n"
-        "Нажми кнопку «Очистить историю» — это сбросит память о предыдущих рационах и цели"
-    )
-    await message.answer(help_text, parse_mode="Markdown")
-
-@dp.message(Command("clear_memory"))
-async def cmd_clear_memory(message: types.Message):
-    user = message.from_user
-    save_user(user.id, user.first_name, user.last_name, user.username)
-    
-    if clear_user_history(message.from_user.id):
-        await message.answer("🗑 История твоих рационов и цели по КБЖУ очищены! Теперь я буду составлять меню с чистого листа.")
-    else:
-        await message.answer("📭 У тебя пока нет сохранённой истории.")
-
-# ========== КОМАНДЫ ДЛЯ ЦЕЛЕЙ (КБЖУ) ==========
+# ========== КОМАНДА /set_goals (запускает FSM) ==========
 @dp.message(Command("set_goals"))
-async def cmd_set_goals(message: types.Message):
+async def cmd_set_goals_start(message: types.Message, state: FSMContext):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
     
-    # Разбираем аргументы: /set_goals 2000 150 60 200
-    args = message.text.split()[1:]
-    if len(args) == 4:
-        try:
-            calories = int(args[0])
-            protein = int(args[1])
-            fat = int(args[2])
-            carbs = int(args[3])
-            
-            if calories < 500 or calories > 5000:
-                await message.answer("⚠️ Калории должны быть от 500 до 5000")
-                return
-            if protein < 20 or protein > 300:
-                await message.answer("⚠️ Белки должны быть от 20 до 300 г")
-                return
-            if fat < 10 or fat > 200:
-                await message.answer("⚠️ Жиры должны быть от 10 до 200 г")
-                return
-            if carbs < 20 or carbs > 500:
-                await message.answer("⚠️ Углеводы должны быть от 20 до 500 г")
-                return
-            
-            save_goals(user.id, calories, protein, fat, carbs)
-            await message.answer(
-                f"✅ *Цели сохранены!*\n\n"
-                f"🔥 Калории: `{calories}` ккал\n"
-                f"💪 Белки: `{protein}` г\n"
-                f"🥑 Жиры: `{fat}` г\n"
-                f"🍞 Углеводы: `{carbs}` г\n\n"
-                "Теперь я буду учитывать их при составлении рациона!",
-                parse_mode="Markdown"
-            )
-            return
-        except ValueError:
-            await message.answer("⚠️ Укажи числа: `/set_goals 2000 150 60 200`")
-            return
+    # Устанавливаем состояние "ожидание ввода целей"
+    await state.set_state(GoalStates.waiting_for_goals)
     
     await message.answer(
-        "📝 *Как установить цели:*\n"
-        "`/set_goals калории белки жиры углеводы`\n\n"
-        "Пример: `/set_goals 2000 150 60 200`\n\n"
+        "📝 *Введи четыре числа через пробел в порядке:*\n"
+        "`калории белки жиры углеводы`\n\n"
+        "Пример: `2000 150 60 200`\n\n"
         "Где:\n"
         "• калории — общая калорийность на день (500-5000)\n"
         "• белки — граммы белка (20-300)\n"
         "• жиры — граммы жиров (10-200)\n"
-        "• углеводы — граммы углеводов (20-500)",
+        "• углеводы — граммы углеводов (20-500)\n\n"
+        "Напиши *отмена*, чтобы отменить ввод.",
         parse_mode="Markdown"
     )
 
+# ========== ОБРАБОТЧИК ВВОДА ЧИСЕЛ (КОГДА СОСТОЯНИЕ waiting_for_goals) ==========
+@dp.message(GoalStates.waiting_for_goals, F.text)
+async def process_goals_input(message: types.Message, state: FSMContext):
+    user = message.from_user
+    
+    # Проверка на отмену
+    if message.text.lower() == "отмена":
+        await state.clear()
+        await message.answer("❌ Ввод целей отменён.")
+        return
+    
+    # Разбиваем текст на части
+    args = message.text.strip().split()
+    
+    if len(args) != 4:
+        await message.answer(
+            "⚠️ Нужно ввести *ровно 4 числа* через пробел.\n"
+            "Пример: `2000 150 60 200`\n\n"
+            "Напиши *отмена*, чтобы отменить ввод.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    try:
+        calories = int(args[0])
+        protein = int(args[1])
+        fat = int(args[2])
+        carbs = int(args[3])
+        
+        # Проверка на разумные пределы
+        if calories < 500 or calories > 5000:
+            await message.answer("⚠️ Калории должны быть от 500 до 5000. Попробуй ещё раз.")
+            return
+        if protein < 20 or protein > 300:
+            await message.answer("⚠️ Белки должны быть от 20 до 300 г. Попробуй ещё раз.")
+            return
+        if fat < 10 or fat > 200:
+            await message.answer("⚠️ Жиры должны быть от 10 до 200 г. Попробуй ещё раз.")
+            return
+        if carbs < 20 or carbs > 500:
+            await message.answer("⚠️ Углеводы должны быть от 20 до 500 г. Попробуй ещё раз.")
+            return
+        
+        # Сохраняем цели в базу данных
+        save_goals(user.id, calories, protein, fat, carbs)
+        
+        # Выходим из состояния
+        await state.clear()
+        
+        await message.answer(
+            f"✅ *Цели сохранены!*\n\n"
+            f"🔥 Калории: `{calories}` ккал\n"
+            f"💪 Белки: `{protein}` г\n"
+            f"🥑 Жиры: `{fat}` г\n"
+            f"🍞 Углеводы: `{carbs}` г\n\n"
+            "Теперь я буду учитывать их при составлении рациона!",
+            parse_mode="Markdown"
+        )
+        
+    except ValueError:
+        await message.answer(
+            "⚠️ Введи *числа* через пробел.\n"
+            "Пример: `2000 150 60 200`\n\n"
+            "Напиши *отмена*, чтобы отменить ввод.",
+            parse_mode="Markdown"
+        )
+
+# ========== КОМАНДА /my_goals (без изменений) ==========
 @dp.message(Command("my_goals"))
-async def cmd_my_goals(message: types.Message):
+async def cmd_my_goals(message: types.Message, state: FSMContext):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
+    
+    # Сбрасываем состояние, если пользователь был в процессе ввода целей
+    await state.clear()
     
     goals = get_goals(user.id)
     if goals:
@@ -355,13 +373,46 @@ async def cmd_my_goals(message: types.Message):
     else:
         await message.answer(
             "❌ Цели не установлены.\n"
-            "Используй `/set_goals калории белки жиры углеводы`\n"
-            "Пример: `/set_goals 2000 150 60 200`",
+            "Используй `/set_goals`, чтобы начать ввод.",
             parse_mode="Markdown"
         )
 
+# ========== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (ОНИ ДОЛЖНЫ ИГНОРИРОВАТЬ СОСТОЯНИЕ) ==========
+@dp.message(Command("help"), StateFilter(None))
+async def cmd_help(message: types.Message):
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
+    help_text = (
+        "❓ *Помощь*\n\n"
+        "📝 *Как составить рацион:*\n"
+        "Напиши список продуктов через запятую или нажми кнопку «Составить рацион»\n\n"
+        "🧠 *Как бот запоминает:*\n"
+        "• Я помню, что ты ел вчера и позавчера\n"
+        "• Стараюсь не повторять блюда\n"
+        "• Меняю типы кухни и основные ингредиенты\n\n"
+        "🎯 *Цели по КБЖУ:*\n"
+        "/set_goals — начать ввод целей (4 числа через пробел)\n"
+        "/my_goals — посмотреть текущие цели\n\n"
+        "📖 *Рецепты:*\n"
+        "/recipe — получить рецепт блюда из сегодняшнего рациона\n\n"
+        "🗑 *Очистить историю:*\n"
+        "Нажми кнопку «Очистить историю» — это сбросит память о предыдущих рационах и цели"
+    )
+    await message.answer(help_text, parse_mode="Markdown")
+
+@dp.message(Command("clear_memory"), StateFilter(None))
+async def cmd_clear_memory(message: types.Message):
+    user = message.from_user
+    save_user(user.id, user.first_name, user.last_name, user.username)
+    
+    if clear_user_history(message.from_user.id):
+        await message.answer("🗑 История твоих рационов и цели по КБЖУ очищены! Теперь я буду составлять меню с чистого листа.")
+    else:
+        await message.answer("📭 У тебя пока нет сохранённой истории.")
+
 # ========== КОМАНДА /recipe (получить рецепт) ==========
-@dp.message(Command("recipe"))
+@dp.message(Command("recipe"), StateFilter(None))
 async def cmd_recipe(message: types.Message):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
@@ -514,7 +565,7 @@ async def process_recipe_callback(callback_query: types.CallbackQuery):
     await callback_query.answer()
 
 # ========== СКРЫТАЯ КОМАНДА /stats (ТОЛЬКО ДЛЯ АДМИНИСТРАТОРА) ==========
-@dp.message(Command("stats"))
+@dp.message(Command("stats"), StateFilter(None))
 async def cmd_stats(message: types.Message):
     ADMIN_ID = 5179439405  # Ваш ID
     
@@ -554,14 +605,14 @@ async def cmd_stats(message: types.Message):
         parse_mode="Markdown"
     )
 
-@dp.message(F.text == "📋 Составить рацион")
+@dp.message(F.text == "📋 Составить рацион", StateFilter(None))
 async def button_generate(message: types.Message):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
     
     await message.answer("📝 Напиши список продуктов, которые есть дома, через запятую\n\nПример: *курица, рис, помидоры, яйца, лук*", parse_mode="Markdown")
 
-@dp.message(F.text == "🗑 Очистить историю")
+@dp.message(F.text == "🗑 Очистить историю", StateFilter(None))
 async def button_clear(message: types.Message):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
@@ -571,7 +622,7 @@ async def button_clear(message: types.Message):
     else:
         await message.answer("📭 У тебя пока нет сохранённой истории.")
 
-@dp.message(F.text == "❓ Помощь")
+@dp.message(F.text == "❓ Помощь", StateFilter(None))
 async def button_help(message: types.Message):
     user = message.from_user
     save_user(user.id, user.first_name, user.last_name, user.username)
@@ -579,7 +630,7 @@ async def button_help(message: types.Message):
     await cmd_help(message)
 
 # ========== ГЕНЕРАЦИЯ РАЦИОНА ==========
-@dp.message(F.text)
+@dp.message(F.text, StateFilter(None))
 async def generate_meal_plan(message: types.Message):
     # Сохраняем пользователя при каждом сообщении
     user = message.from_user
