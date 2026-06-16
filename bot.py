@@ -503,7 +503,7 @@ async def process_recipe_callback(callback_query: types.CallbackQuery):
         # Убираем лишние эмодзи из текста рецепта, если они есть
         await callback_query.message.edit_text(
             f"📖 *Рецепт: {meal_name}*\n\n{recipe}",
-            parse_mode="Markdown"
+            parse_mode=None
         )
         
     except asyncio.TimeoutError:
